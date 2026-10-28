@@ -198,6 +198,47 @@ ProductsMapping: dict[str, dict[str, tuple[TuyaLightEntityDescription, ...]]] = 
             ),
         )
     },
+    "xdd": {
+        # Nova Luce CCT ceiling light (WIFI-BLE-CCT-CBU-IPEX). The DPs are
+        # declared here because manual setup has no cloud specification. Only
+        # one entity: the category's night light DP doesn't exist on it.
+        "pilbpgf9wisbac1o": (
+            TuyaLightEntityDescription(
+                key=DPCode.SWITCH_LED,
+                name=None,
+                color_mode=DPCode.WORK_MODE,
+                brightness=DPCode.BRIGHT_VALUE,
+                color_temp=DPCode.TEMP_VALUE,
+                function=[
+                    {
+                        "code": "switch_led",
+                        "dp_id": 20,
+                        "type": "Boolean",
+                        "values": {},
+                    },
+                    {
+                        "code": "work_mode",
+                        "dp_id": 21,
+                        "type": "Enum",
+                        "values": {"range": ["white", "colour", "scene", "music"]},
+                    },
+                    {
+                        "code": "bright_value",
+                        "dp_id": 22,
+                        "type": "Integer",
+                        "values": {"min": 10, "max": 1000, "scale": 0, "step": 1},
+                    },
+                    {
+                        "code": "temp_value",
+                        "dp_id": 23,
+                        "type": "Integer",
+                        "values": {"min": 0, "max": 1000, "scale": 0, "step": 1},
+                    },
+                ],
+                status_range=[],
+            ),
+        ),
+    },
 }
 
 # Copied from standard Tuya light component - we could add some default values here too
