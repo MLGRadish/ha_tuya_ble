@@ -125,6 +125,19 @@ async def test_pulse_light_brightness_skips_the_switch(hass: HomeAssistant) -> N
     assert device.datapoints[BRIGHTNESS_DP].value == 1000
 
 
+async def test_pulse_light_on_reports_color_temp_mode(hass: HomeAssistant) -> None:
+    """With the work mode never reported, the light is in colour temp mode.
+
+    It doesn't support HS, and Home Assistant rejects an on light reporting
+    an unsupported colour mode.
+    """
+    _, entity = await _setup_light(hass)
+    await entity.async_turn_on()
+    await hass.async_block_till_done()
+
+    assert entity.color_mode == ColorMode.COLOR_TEMP
+
+
 async def test_pulse_light_ignores_switch_reports(hass: HomeAssistant) -> None:
     """The device reporting the switch doesn't change the tracked state."""
     device, entity = await _setup_light(hass)

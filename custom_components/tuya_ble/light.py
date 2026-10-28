@@ -922,9 +922,11 @@ class TuyaBLELight(TuyaBLEEntity, LightEntity):
     def color_mode(self) -> ColorMode:
         """Return the color_mode of the light."""
         # We consider it to be in HS color mode, when work mode is anything
-        # else than "white".
+        # else than "white" - but only for lights that support HS, since an
+        # unreported work mode would otherwise put a CCT light in HS mode.
         if (
-            self._color_mode_dpcode
+            ColorMode.HS in self.supported_color_modes
+            and self._color_mode_dpcode
             and self.device.status.get(self._color_mode_dpcode) != WorkMode.WHITE
         ):
             return ColorMode.HS
