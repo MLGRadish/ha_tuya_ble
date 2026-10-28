@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import asyncio
 import logging
 import json
 import copy
@@ -24,10 +25,11 @@ from homeassistant.components.light import (
 )
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import STATE_ON, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -113,6 +115,9 @@ class TuyaLightEntityDescription(TuyaBLEEntityDescription, LightEntityDescriptio
     # applied when sent together with the work mode enum DP set to white (0).
     stair_mode_dp_id: int | None = None
     stair_work_mode_dp_id: int | None = None
+    # Lights handled by TuyaBLEPulseLight: the switch DP acts as a momentary
+    # button that toggles the light on an on-then-off pulse.
+    pulse_switch: bool = False
 
 
 # You can add here description for device for which automatic capabilities setting
@@ -201,7 +206,8 @@ ProductsMapping: dict[str, dict[str, tuple[TuyaLightEntityDescription, ...]]] = 
     "xdd": {
         # Nova Luce CCT ceiling light (WIFI-BLE-CCT-CBU-IPEX). The DPs are
         # declared here because manual setup has no cloud specification. Only
-        # one entity: the category's night light DP doesn't exist on it.
+        # one entity: the category's night light DP doesn't exist on it. The
+        # switch DP is a momentary button, so on/off is pulsed.
         "pilbpgf9wisbac1o": (
             TuyaLightEntityDescription(
                 key=DPCode.SWITCH_LED,
@@ -209,6 +215,7 @@ ProductsMapping: dict[str, dict[str, tuple[TuyaLightEntityDescription, ...]]] = 
                 color_mode=DPCode.WORK_MODE,
                 brightness=DPCode.BRIGHT_VALUE,
                 color_temp=DPCode.TEMP_VALUE,
+                pulse_switch=True,
                 function=[
                     {
                         "code": "switch_led",
@@ -1111,6 +1118,71 @@ class TuyaBLEStairLight(TuyaBLELight):
         self._write_datapoints([self._stair_mode(self.STAIR_MODE_OFF)])
 
 
+class TuyaBLEPulseLight(TuyaBLELight, RestoreEntity):
+    """Tuya BLE light whose switch DP behaves like a momentary button.
+
+    A lone switch write is ignored and the device reports the switch off again;
+    the light toggles only on an on-then-off pulse, which is what the Tuya app
+    sends. The switch DP therefore says nothing about the light, so the state
+    is tracked here (and restored after a restart), and on/off only pulses when
+    the state actually changes. Brightness and colour temperature are sent as
+    usual, without the switch write.
+    """
+
+    PULSE_SECONDS = 0.8
+
+    _attr_assumed_state = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._tracked_on = False
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the tracked state."""
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            self._tracked_on = last_state.state == STATE_ON
+
+    @property
+    def is_on(self) -> bool:
+        """Return the tracked state; the switch DP doesn't reflect the light."""
+        return self._tracked_on
+
+    def _send_command(self, commands: list[dict[str, Any]]) -> None:
+        """Send everything except the switch, which is only ever pulsed."""
+        key = self.entity_description.key
+        super()._send_command([c for c in commands if c.get("code") != key])
+
+    async def _async_pulse(self) -> None:
+        """Toggle the light with an on-then-off pulse of the switch DP."""
+        dp_id = self.find_dpid(self.entity_description.key, prefer_function=True)
+        if dp_id is None:
+            return
+        datapoints = self._device.datapoints
+        for value in (True, False):
+            datapoint = datapoints.get_or_create(
+                dp_id, TuyaBLEDataPointType.DT_BOOL, value
+            )
+            await datapoint.set_value(value)
+            if value:
+                await asyncio.sleep(self.PULSE_SECONDS)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Pulse the light on if it's off, then apply brightness or colour."""
+        if not self._tracked_on:
+            await self._async_pulse()
+            self._tracked_on = True
+            self.async_write_ha_state()
+        self.turn_on(**kwargs)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Pulse the light off if it's on."""
+        if self._tracked_on:
+            await self._async_pulse()
+            self._tracked_on = False
+            self.async_write_ha_state()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -1126,9 +1198,12 @@ async def async_setup_entry(
     entities: list[TuyaBLELight] = []
 
     for desc in descs:
-        light_class = (
-            TuyaBLELight if desc.stair_mode_dp_id is None else TuyaBLEStairLight
-        )
+        if desc.stair_mode_dp_id is not None:
+            light_class = TuyaBLEStairLight
+        elif desc.pulse_switch:
+            light_class = TuyaBLEPulseLight
+        else:
+            light_class = TuyaBLELight
         entities.append(
             light_class(
                 hass,
